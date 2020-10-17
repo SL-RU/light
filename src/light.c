@@ -185,7 +185,7 @@ static bool _light_percent_to_raw(light_context_t *ctx, double inpercent, uint64
     else
         target_value_d = max_value_d * (light_percent_clamp(inpercent) / 100.0);
     uint64_t target_value = LIGHT_CLAMP((uint64_t)target_value_d, 0, max_value);
-    *outraw = target_value;
+    *outraw = round(target_value);
     
     return true;
 }
@@ -880,7 +880,7 @@ bool light_cmd_add_brightness(light_context_t *ctx)
         return false;
     }
     
-    uint64_t value = 0;
+    uint64_t value = 0, new_value = 0;
     if(!target->get_value(target, &value))
     {
         LIGHT_ERR("failed to read from target");
@@ -909,11 +909,15 @@ bool light_cmd_add_brightness(light_context_t *ctx)
             return false;
         }
         percent += ctx->run_params.float_value;
-        if(!_light_percent_to_raw(ctx, percent, &value))
+        if(!_light_percent_to_raw(ctx, percent, &new_value))
         {
             LIGHT_ERR("failed to convert value from percent to raw for device target");
             return false;
-        }        
+        }
+        if(new_value <= value)
+            value += 1;
+        else
+            value = new_value;
         break;
     }
     
@@ -976,7 +980,7 @@ bool light_cmd_sub_brightness(light_context_t *ctx)
         {
             LIGHT_ERR("failed to convert value from percent to raw for device target");
             return false;
-        }        
+        }
         break;
     }
     
