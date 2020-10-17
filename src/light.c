@@ -16,7 +16,7 @@
 #include <inttypes.h> // PRIu64
 
 /* Static helper functions for this file only, prefix with _ */
-
+#include <math.h>
 
 static void _light_add_enumerator_device(light_device_enumerator_t *enumerator, light_device_t *new_device)
 {
@@ -146,8 +146,9 @@ static light_device_target_t* _light_find_target(light_device_t * dev, char cons
     return NULL;
 }
 
-static bool _light_raw_to_percent(light_device_target_t *target, uint64_t inraw, double *outpercent)
+static bool _light_raw_to_percent(light_context_t *ctx, uint64_t inraw, double *outpercent)
 {
+        light_device_target_t *target = ctx->run_params.device_target;
         double inraw_d = (double)inraw;
         uint64_t max_value = 0;
         if(!target->get_max_value(target, &max_value))
@@ -156,14 +157,20 @@ static bool _light_raw_to_percent(light_device_target_t *target, uint64_t inraw,
             return false;
         }
         double max_value_d = (double)max_value;
-        double percent = light_percent_clamp((inraw_d / max_value_d) * 100.0);
-        *outpercent = percent;
+        double percent = 0;
+        if(ctx->run_params.mode == LC_MODE_EXPONENTIAL)
+            percent = pow((inraw_d / max_value_d), 1.0 / LIGHT_EXPONENT) * 100.0;
+        else
+            percent = (inraw_d / max_value_d) * 100.0;
+        
+        *outpercent = light_percent_clamp(percent);
         
         return true;
 }
 
-static bool _light_percent_to_raw(light_device_target_t *target, double inpercent, uint64_t *outraw)
+static bool _light_percent_to_raw(light_context_t *ctx, double inpercent, uint64_t *outraw)
 {
+    light_device_target_t *target = ctx->run_params.device_target;
     uint64_t max_value = 0;
     if(!target->get_max_value(target, &max_value))
     {
@@ -172,7 +179,11 @@ static bool _light_percent_to_raw(light_device_target_t *target, double inpercen
     }
 
     double max_value_d = (double)max_value;
-    double target_value_d = max_value_d * (light_percent_clamp(inpercent) / 100.0);
+    double target_value_d = 0;
+    if(ctx->run_params.mode == LC_MODE_EXPONENTIAL)
+        target_value_d = max_value_d * pow(light_percent_clamp(inpercent) / 100.0, LIGHT_EXPONENT);
+    else
+        target_value_d = max_value_d * (light_percent_clamp(inpercent) / 100.0);
     uint64_t target_value = LIGHT_CLAMP((uint64_t)target_value_d, 0, max_value);
     *outraw = target_value;
     
@@ -203,6 +214,7 @@ static void _light_print_usage()
         "\n"
         "Options:\n"
         "  -r          Interpret input and output values in raw mode (ignored for -T)\n"
+        "  -e          Interpret input and output values in exponential mode (ignored for -r and -T)\n"
         "  -s          Specify device target path to use, use -L to list available\n"
         "  -v          Specify the verbosity level (default 0)\n"
         "                 0: Values only\n"
@@ -240,8 +252,8 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
     bool need_target = true; // default cmd is get brightness
     bool specified_target = false;
     snprintf(ctrl_name, sizeof(ctrl_name), "%s", "sysfs/backlight/auto");
-    
-    while((curr_arg = getopt(argc, argv, "HhVGSLMNPAUTOIv:s:r")) != -1)
+
+    while((curr_arg = getopt(argc, argv, "HhVGSLMNPAUTOIv:s:re")) != -1)
     {
         switch(curr_arg)
         {
@@ -269,7 +281,10 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
                 specified_target = true;
                 break;
             case 'r':
-                ctx->run_params.raw_mode = true;
+                ctx->run_params.mode = LC_MODE_RAW;
+                break;
+            case 'e':
+                ctx->run_params.mode = LC_MODE_EXPONENTIAL;
                 break;
             
             // Commands
@@ -317,6 +332,7 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
                 break;
             case 'T':
                 _light_set_context_command(ctx, light_cmd_mul_brightness);
+                ctx->run_params.mode = LC_MODE_PERCENTAGE;
                 need_target = true;
                 need_float_value = true;
                 break;
@@ -368,7 +384,7 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
 
     if(need_value)
     {
-        if(ctx->run_params.raw_mode)
+        if(ctx->run_params.mode == LC_MODE_RAW)
         {
             if(sscanf(argv[optind], "%lu", &ctx->run_params.value) != 1)
             {
@@ -387,16 +403,8 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
                 return false;
             }
             
-            percent_value = light_percent_clamp(percent_value);
-            
-            uint64_t raw_value = 0;
-            if(!_light_percent_to_raw(ctx->run_params.device_target, percent_value, &raw_value))
-            {
-                LIGHT_ERR("failed to convert from percent to raw for device target");
-                return false;
-            }
-            
-            ctx->run_params.value = raw_value;
+            percent_value = light_percent_clamp(percent_value);                        
+            need_float_value = true;
         }
     }
 
@@ -429,7 +437,7 @@ light_context_t* light_initialize(int argc, char **argv)
     new_ctx->run_params.command = NULL;
     new_ctx->run_params.device_target = NULL;
     new_ctx->run_params.value = 0;
-    new_ctx->run_params.raw_mode = false;
+    new_ctx->run_params.mode = LC_MODE_PERCENTAGE;
 
     uid_t uid = getuid();
     uid_t euid = geteuid();
@@ -754,14 +762,14 @@ bool light_cmd_get_brightness(light_context_t *ctx)
         return false;
     }
     
-    if(ctx->run_params.raw_mode)
+    if(ctx->run_params.mode == LC_MODE_RAW)
     {
         printf("%" PRIu64 "\n", value);
     }
     else 
     {
         double percent = 0.0;
-        if(!_light_raw_to_percent(target, value, &percent))
+        if(!_light_raw_to_percent(ctx, value, &percent))
         {
             LIGHT_ERR("failed to convert from raw to percent from device target");
             return false;
@@ -781,7 +789,8 @@ bool light_cmd_get_max_brightness(light_context_t *ctx)
         return false;
     }
     
-    if(!ctx->run_params.raw_mode)
+    if(ctx->run_params.mode == LC_MODE_PERCENTAGE ||
+       ctx->run_params.mode == LC_MODE_EXPONENTIAL)
     {
         printf("100.0\n");
         return true;
@@ -831,7 +840,7 @@ bool light_cmd_get_min_brightness(light_context_t *ctx)
     uint64_t minimum_value = 0;
     if(!light_file_read_uint64(target_path, &minimum_value))
     {
-        if(ctx->run_params.raw_mode)
+        if(ctx->run_params.mode == LC_MODE_RAW)
         {
             printf("0\n");
         }
@@ -843,14 +852,14 @@ bool light_cmd_get_min_brightness(light_context_t *ctx)
         return true;
     }
     
-    if(ctx->run_params.raw_mode)
+    if(ctx->run_params.mode == LC_MODE_RAW)
     {
         printf("%" PRIu64 "\n", minimum_value);
     }
     else 
     {
         double minimum_d = 0.0;
-        if(!_light_raw_to_percent(ctx->run_params.device_target, minimum_value, &minimum_d))
+        if(!_light_raw_to_percent(ctx, minimum_value, &minimum_d))
         {
             LIGHT_ERR("failed to convert value from raw to percent for device target");
             return false;
@@ -884,16 +893,35 @@ bool light_cmd_add_brightness(light_context_t *ctx)
         LIGHT_ERR("failed to read from target");
         return false;
     }
+
+    double percent = 0.0;
     
-    value += ctx->run_params.value;
+    switch(ctx->run_params.mode)
+    {
+    case LC_MODE_RAW:    
+        value += ctx->run_params.value;
+        break;
+    case LC_MODE_PERCENTAGE:
+    case LC_MODE_EXPONENTIAL:
+        if(!_light_raw_to_percent(ctx, value, &percent))
+        {
+            LIGHT_ERR("failed to convert value from raw to percent for device target");
+            return false;
+        }
+        percent += ctx->run_params.float_value;
+        if(!_light_percent_to_raw(ctx, percent, &value))
+        {
+            LIGHT_ERR("failed to convert value from percent to raw for device target");
+            return false;
+        }        
+        break;
+    }
     
     uint64_t mincap = _light_get_min_cap(ctx);
     if(mincap > value)
     {
         value = mincap;
     }
-    
-    
     if(value > max_value)
     {
         value = max_value;
@@ -904,7 +932,6 @@ bool light_cmd_add_brightness(light_context_t *ctx)
         LIGHT_ERR("failed to write to target");
         return false;
     }
-    
     return true;
 }
 
@@ -923,14 +950,34 @@ bool light_cmd_sub_brightness(light_context_t *ctx)
         LIGHT_ERR("failed to read from target");
         return false;
     }
+
+    double percent = 0.0;
     
-    if(value > ctx->run_params.value)
+    switch(ctx->run_params.mode)
     {
-        value -= ctx->run_params.value;
-    }
-    else 
-    {
-        value = 0;
+    case LC_MODE_RAW:
+        if(value > ctx->run_params.value)
+            value -= ctx->run_params.value;
+        else 
+            value = 0;
+        break;
+    case LC_MODE_PERCENTAGE:
+    case LC_MODE_EXPONENTIAL:
+        if(!_light_raw_to_percent(ctx, value, &percent))
+        {
+            LIGHT_ERR("failed to convert value from raw to percent for device target");
+            return false;
+        }
+        if(percent > ctx->run_params.float_value)
+            percent -= ctx->run_params.float_value;
+        else
+            percent = 0;
+        if(!_light_percent_to_raw(ctx, percent, &value))
+        {
+            LIGHT_ERR("failed to convert value from percent to raw for device target");
+            return false;
+        }        
+        break;
     }
     
     uint64_t mincap = _light_get_min_cap(ctx);

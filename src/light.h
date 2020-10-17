@@ -26,6 +26,9 @@ typedef bool (*LFUNCVALGET)(light_device_target_t*, uint64_t*);
 typedef bool (*LFUNCMAXVALGET)(light_device_target_t*, uint64_t*);
 typedef bool (*LFUNCCUSTOMCMD)(light_device_target_t*, char const *);
 
+/* Constant for exponential mode */
+#define LIGHT_EXPONENT 4.0
+
 /* Describes a target within a device (for example a led on a keyboard, or a controller for a backlight) */
 struct _light_device_target_t
 {
@@ -68,6 +71,12 @@ typedef struct _light_context_t light_context_t;
 // A command that can be run (set, get, add, subtract, print help, print version, list devices etc.)
 typedef bool (*LFUNCCOMMAND)(light_context_t *);
 
+typedef enum _light_context_mode {
+    LC_MODE_PERCENTAGE,
+    LC_MODE_RAW,
+    LC_MODE_EXPONENTIAL
+} light_context_mode;
+
 struct _light_context_t
 {
     struct 
@@ -76,7 +85,7 @@ struct _light_context_t
         // Only one of value and raw_value is populated; which one depends on the command
         uint64_t                value; // The input value, in raw mode
         float                   float_value; // The input value as a float
-        bool                    raw_mode; // Whether or not we use raw or percentage mode
+        light_context_mode      mode; // Whether or not we use raw, exponential or percentage mode
         light_device_target_t   *device_target; // The device target to act on
     } run_params;
 
