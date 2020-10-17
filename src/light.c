@@ -403,7 +403,7 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
                 return false;
             }
             
-            percent_value = light_percent_clamp(percent_value);                        
+            percent_value = light_percent_clamp(percent_value);
             need_float_value = true;
         }
     }

@@ -54,6 +54,10 @@ Increase backlight brightness by 5 percent
 
     light -A 5
 
+Decrease backlight brightness by 5 percent in exponential mode (natural way)
+
+    light -e -U 5
+
 Set the minimum cap to 2 in raw value on the sysfs/backlight/acpi_video0 device:
 
     light -Nrs "sysfs/backlight/acpi_video0" 2
@@ -100,6 +104,7 @@ Without any extra options, the command will operate on the device called `sysfs/
 These can be mixed, combined and matched after convenience. 
 
 * `-r` Raw mode, values (printed and interpreted from commandline) will be treated as integers in the controllers native range, instead of in percent.
+* `-e` Exponential mode, values (printed and interpreted from commandline) will be treated as double percentage between 0.0 - 100.0 in the logarithmic scale with base 4.
 * `-v <verbosity>` Specifies the verbosity level. 0 is default and prints nothing. 1 prints only errors, 2 prints only errors and warnings, and 3 prints both errors, warnings and notices.
 * `-s <devicepath>` Specifies which device to work on. List available devices with the -L command. Full path is needed.
 
