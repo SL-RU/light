@@ -58,6 +58,10 @@ Decrease backlight brightness by 5 percent in exponential mode (natural way)
 
     light -e -U 5
 
+Increase backlight brightness by 2 percent in exponential mode and specify exponential base K, it must be more then 1.0 and less then 20.0
+
+    light -e2.8 -U 2
+
 Set the minimum cap to 2 in raw value on the sysfs/backlight/acpi_video0 device:
 
     light -Nrs "sysfs/backlight/acpi_video0" 2

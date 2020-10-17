@@ -159,7 +159,7 @@ static bool _light_raw_to_percent(light_context_t *ctx, uint64_t inraw, double *
         double max_value_d = (double)max_value;
         double percent = 0;
         if(ctx->run_params.mode == LC_MODE_EXPONENTIAL)
-            percent = pow((inraw_d / max_value_d), 1.0 / LIGHT_EXPONENT) * 100.0;
+            percent = pow((inraw_d / max_value_d), 1.0 / ctx->run_params.exponent) * 100.0;
         else
             percent = (inraw_d / max_value_d) * 100.0;
         
@@ -181,7 +181,7 @@ static bool _light_percent_to_raw(light_context_t *ctx, double inpercent, uint64
     double max_value_d = (double)max_value;
     double target_value_d = 0;
     if(ctx->run_params.mode == LC_MODE_EXPONENTIAL)
-        target_value_d = max_value_d * pow(light_percent_clamp(inpercent) / 100.0, LIGHT_EXPONENT);
+        target_value_d = max_value_d * pow(light_percent_clamp(inpercent) / 100.0, ctx->run_params.exponent);
     else
         target_value_d = max_value_d * (light_percent_clamp(inpercent) / 100.0);
     uint64_t target_value = LIGHT_CLAMP((uint64_t)target_value_d, 0, max_value);
@@ -214,7 +214,9 @@ static void _light_print_usage()
         "\n"
         "Options:\n"
         "  -r          Interpret input and output values in raw mode (ignored for -T)\n"
-        "  -e          Interpret input and output values in exponential mode (ignored for -r and -T)\n"
+        "  -e[K]       Interpret input and output values in exponential mode (ignored for -r)\n"
+        "                 Optional K value specifies base of the exponential mode. Default is 4.0\n"
+        "                 K must be more then 1.0 and less then 20.0 \n"
         "  -s          Specify device target path to use, use -L to list available\n"
         "  -v          Specify the verbosity level (default 0)\n"
         "                 0: Values only\n"
@@ -253,7 +255,7 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
     bool specified_target = false;
     snprintf(ctrl_name, sizeof(ctrl_name), "%s", "sysfs/backlight/auto");
 
-    while((curr_arg = getopt(argc, argv, "HhVGSLMNPAUTOIv:s:re")) != -1)
+    while((curr_arg = getopt(argc, argv, "HhVGSLMNPAUTOIv:s:re?")) != -1)
     {
         switch(curr_arg)
         {
@@ -284,7 +286,27 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
                 ctx->run_params.mode = LC_MODE_RAW;
                 break;
             case 'e':
-                ctx->run_params.mode = LC_MODE_EXPONENTIAL;
+                if(ctx->run_params.mode != LC_MODE_RAW)
+                    ctx->run_params.mode = LC_MODE_EXPONENTIAL;
+                if(optarg)
+                {
+                    if(sscanf(optarg, "%lf", &ctx->run_params.exponent) != 1)
+                    {
+                        fprintf(stderr, "-e argument is not an double.\n\n");
+                        _light_print_usage();
+                        return false;
+                    }
+                    else if(ctx->run_params.exponent <= 1 || ctx->run_params.exponent > 20)
+                    {
+                        fprintf(stderr, "-e argument must be more then 1 and less then 20.\n\n");
+                        _light_print_usage();
+                        return false;
+                    }
+                }
+                else
+                {
+                    ctx->run_params.exponent = LIGHT_EXPONENT;
+                }
                 break;
             
             // Commands
@@ -332,7 +354,8 @@ static bool _light_parse_arguments(light_context_t *ctx, int argc, char** argv)
                 break;
             case 'T':
                 _light_set_context_command(ctx, light_cmd_mul_brightness);
-                ctx->run_params.mode = LC_MODE_PERCENTAGE;
+                if(ctx->run_params.mode != LC_MODE_RAW)
+                    ctx->run_params.mode = LC_MODE_PERCENTAGE;
                 need_target = true;
                 need_float_value = true;
                 break;
@@ -967,6 +990,11 @@ bool light_cmd_sub_brightness(light_context_t *ctx)
         break;
     case LC_MODE_PERCENTAGE:
     case LC_MODE_EXPONENTIAL:
+        if(value < 5 && value > 0)
+        { // on small values adequate behaviour
+            value --;
+            break;
+        }   
         if(!_light_raw_to_percent(ctx, value, &percent))
         {
             LIGHT_ERR("failed to convert value from raw to percent for device target");
